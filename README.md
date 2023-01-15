@@ -1,5 +1,11 @@
 # protected-note-app
- 
+
+Uruchamienie:
+
+    docker image build -t protected-note-app . 
+    docker run -p 5000:5000 -d protected-note-app
+
+
 Opis projektu:
 Aplikacja pozwala zalogowanemu użytkownikowi na przechowywanie notatek tekstowych. Niektóre notatki mogą być zaznaczone jako zaszyfrowane. Odszyfrowanie powinno wymagać podania tajnego hasła.
 
