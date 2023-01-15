@@ -6,6 +6,8 @@ from sqlalchemy.sql.expression import or_
 from flask import render_template, url_for, flash, redirect, request, abort, session
 from main import app, db, bcrypt
 from main.forms import PostForm, RegistrationForm, LoginForm, UpdateAccountForm, DecryptForm
+from main.cipher import encrypt, decrypt, generate_iv
+from main.entrophy import calculate_entrophy
 from main.models import User, Post
 from flask_login import login_user, logout_user, current_user, login_required
 from sqlalchemy import or_, and_
@@ -136,3 +138,76 @@ def account():
         form.email.data = current_user.email
     image_file = url_for('static', filename='profile_pics/' + current_user.image_file)
     return render_template("account.html", title="Account", image_file=image_file, form=form)
+
+
+@app.route("/post/new", methods=['GET', 'POST'])
+@login_required
+def new_post():
+    form = PostForm()
+    if form.validate_on_submit():
+        iv = b'a' * 16
+        content = form.content.data
+        if form.encrypt.data:
+            if not form.password.data:
+                flash(f'Provide valid password!', 'danger')
+                return render_template('full_create_post.html', title="New post",
+                                       form=form, legend='Add Post', require_pass=False)
+            iv = generate_iv()
+            content = encrypt(form.password.data, content, salt=form.title.data, iv=iv)
+
+        post = Post(title=form.title.data, content=content, author=current_user, encrypt=form.encrypt.data,
+                    group_note=False, iv=iv)
+
+        if not post.encrypt:
+            potential_viewers = find_viewers(form.content.data)
+            print(potential_viewers)
+            for v in potential_viewers:
+                viewer = User.query.filter_by(username=v).first()
+                if viewer:
+                    post.group_note = True
+                    post.viewers.append(viewer)
+
+        db.session.add(post)
+        db.session.commit()
+        flash('New post has been added', 'success')
+        return redirect(url_for('index'))
+    return render_template('full_create_post.html', title="New post",
+                           form=form, legend='Add Post', require_pass=False)
+
+
+@app.route("/post/<int:post_id>", methods=['GET', 'POST'])
+@login_required
+def post(post_id):
+    post = Post.query.get_or_404(post_id)
+    form = DecryptForm()
+    if form.validate_on_submit():
+        if post.author != current_user:
+            abort(403)
+        entrophy = 8
+        content = '***content encrypted***'
+        try:
+            content = decrypt(password=form.password.data, encrypted=post.content, salt=post.title, iv=post.iv)
+            entrophy = calculate_entrophy(bytes(content, 'utf-8'))
+        except (IndexError, ValueError):
+            flash(f'Incorrect password provided', 'danger')
+            return redirect(url_for('post', post_id=post_id))
+        if not (
+                entrophy < 7 and form.password.data):  # bcrypt.check_password_hash(current_user.password, form.password.data)
+            flash(f'Incorrect password provided', 'danger')
+            return redirect(url_for('post', post_id=post_id))
+
+        post.content = content
+        post.encrypt = False
+        return render_template('post.html', title=post.title, post=post, form=form)
+    elif request.method == 'GET':
+        if post and post.encrypt:
+            if (current_user.is_authenticated and not post.author == current_user) or not current_user.is_authenticated:
+                flash('You do not have an access to that post', 'danger')
+                return redirect(url_for('index'))
+            post.content = '***content encrypted***'
+        elif post and post.group_note:
+            if (current_user.is_authenticated and not (post.viewers.count(
+                    current_user) or post.author == current_user)) or not current_user.is_authenticated:
+                flash('You do not have an access to that post', 'danger')
+                return redirect(url_for('index'))
+        return render_template('post.html', title=post.title, post=post, form=form)
